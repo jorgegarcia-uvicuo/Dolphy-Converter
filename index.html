@@ -405,6 +405,7 @@ const CUENTAS = {
 const NO_DED_CUENTA = '5005-083-001';
 
 const HEADERS = [
+  'Nombre',
   'Tipo', 'Nº', 'Descripción o comentario',
   'Línea de contrato de suscripción adicional', 'Cód. almacén',
   'Cantidad', 'Cód. unidad medida', 'Costo unit. directo sin IVA',
@@ -412,7 +413,7 @@ const HEADERS = [
   'Líneas de orden emparejadas', '% Descuento línea',
   'Importe línea sin IVA', 'Cant. a asignar', 'Cant. asignada', 'Centro Costos',
 ];
-const COST_IDX = 7; // columna "Costo unit. directo sin IVA" (0-based)
+const COST_IDX = 8; // columna "Costo unit. directo sin IVA" (0-based)
 
 // ═══════════════════════════════════════════════════════════
 // LÓGICA DE TRANSFORMACIÓN
@@ -455,17 +456,19 @@ function processCSV(text) {
 
   const rows = [];
   for (const r of data) {
-    const cat  = clean(r['Categoría Gasto']);
-    const desc = clean(r['Descripción']);
-    const tipo = clean(r['Tipo de Línea']);
-    const tasa = clean(r['Tasa']);
-    const monto = parseFloat(clean(r['Monto Línea'])) || 0;
-    const cc    = clean(r['Centro de Costo']);
-    const nro   = numero(tipo, cat);
-    const isRev = nro === 'REVISAR';
+    const cat      = clean(r['Categoría Gasto']);
+    const desc     = clean(r['Descripción']);
+    const tipo     = clean(r['Tipo de Línea']);
+    const tasa     = clean(r['Tasa']);
+    const monto    = parseFloat(clean(r['Monto Línea'])) || 0;
+    const cc       = clean(r['Centro de Costo']);
+    const empleado = clean(r['Empleado']);
+    const nro      = numero(tipo, cat);
+    const isRev    = nro === 'REVISAR';
 
     rows.push({
       vals: [
+        empleado || null,
         'Cuenta', nro, descripcion(tipo, cat, desc), 'No',
         null, 1, null, monto,
         'VARIOS', ivaGroup(tipo, tasa),
@@ -581,7 +584,7 @@ function buildExcel(data, filename) {
   for (let r = 0; r < rows.length; r++) {
     const row = rows[r];
     for (let c = 0; c < HEADERS.length; c++) {
-      const isMoney = c === COST_IDX || c === 12;
+      const isMoney = c === COST_IDX || c === 13;
       if (row.isRev) sty(r + 1, c, isMoney ? S.revMoney : S.rev);
       else           sty(r + 1, c, isMoney ? S.money    : S.data);
     }
@@ -597,6 +600,7 @@ function buildExcel(data, filename) {
 
   // Anchos de columna
   ws['!cols'] = [
+    {wch:28},
     {wch:10},{wch:18},{wch:55},{wch:14},
     {wch:12},{wch:10},{wch:14},{wch:24},
     {wch:24},{wch:22},{wch:22},{wch:18},
@@ -688,6 +692,7 @@ function renderResults(data, file) {
 function renderTable(rows, total) {
   // Short header labels for display
   const lbls = [
+    'Nombre',
     'Tipo','Nº','Descripción','Contr.','Almacén',
     'Cant.','UM','Costo unit.','Gpo. gen.','Gpo. IVA',
     'Ord. emp.','% Dto.','Importe','Asignar','Asignado','Centro Costos',
@@ -707,7 +712,7 @@ function renderTable(rows, total) {
       const td = document.createElement('td');
       if (v === 'REVISAR') {
         td.innerHTML = '<span class="badge-revisar">⚠ REVISAR</span>';
-      } else if ((i === COST_IDX || i === 12) && typeof v === 'number') {
+      } else if ((i === COST_IDX || i === 13) && typeof v === 'number') {
         td.className = 'num-cell';
         td.textContent = v.toFixed(2);
       } else {
