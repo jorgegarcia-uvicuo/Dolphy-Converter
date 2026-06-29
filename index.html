@@ -428,7 +428,7 @@ function ivaGroup(tipo, tasa) {
   const t = parseFloat(tasa) || 0;
   if (tipo === 'GASTO_BASE')      return Math.abs(t - 0.16) < 0.001 ? 'IVAGENERAL' : 'IVATASA0%';
   if (tipo === 'IVA_ACREDITABLE') return 'IVAGENERAL';
-  if (tipo === 'IEPS')            return 'IEPS';
+  if (tipo === 'IEPS')            return 'IVATASA0%';
   if (tipo === 'NO_DEDUCIBLE')    return 'NO DEDUCIBLE';
   return 'REVISAR';
 }
@@ -460,7 +460,8 @@ function processCSV(text) {
     const desc     = clean(r['Descripción']);
     const tipo     = clean(r['Tipo de Línea']);
     const tasa     = clean(r['Tasa']);
-    const monto    = parseFloat(clean(r['Monto Línea'])) || 0;
+    const rawMonto = parseFloat(clean(r['Monto Línea'])) || 0;
+    const monto    = tipo === 'RETENCION_ISR' ? -rawMonto : rawMonto;
     const cc       = clean(r['Centro de Costo']);
     const empleado = clean(r['Empleado']);
     const nro      = numero(tipo, cat);
@@ -477,6 +478,46 @@ function processCSV(text) {
       isRev, cat, tipo,
     });
   }
+
+  // Resumen: agrupar por UUID (una fila por gasto/transacción)
+  const resByUUID = new Map();
+  const resNoUUID = [];
+  for (const r of data) {
+    const uuid  = clean(r['UUID']);
+    const tipo  = clean(r['Tipo de Línea']);
+    const monto = parseFloat(clean(r['Monto Línea'])) || 0;
+
+    if (uuid) {
+      if (!resByUUID.has(uuid)) {
+        resByUUID.set(uuid, {
+          nombre: clean(r['Empleado']),
+          fecha:  clean(r['Fecha Gasto']),
+          desc:   clean(r['Descripción']),
+          cat:    clean(r['Categoría Gasto']),
+          totalGasto: parseFloat(clean(r['Total Gasto'])) || 0,
+          factura: 0, iva: 0, noDed: 0, ieps: 0,
+        });
+      }
+      const g = resByUUID.get(uuid);
+      if (tipo === 'GASTO_BASE')      g.factura += monto;
+      if (tipo === 'IVA_ACREDITABLE') g.iva     += monto;
+      if (tipo === 'NO_DEDUCIBLE')    g.noDed   += monto;
+      if (tipo === 'IEPS')            g.ieps    += monto;
+    } else {
+      resNoUUID.push({
+        nombre: clean(r['Empleado']),
+        fecha:  clean(r['Fecha Gasto']),
+        desc:   clean(r['Descripción']),
+        cat:    clean(r['Categoría Gasto']),
+        totalGasto: parseFloat(clean(r['Total Gasto'])) || monto,
+        factura: tipo === 'GASTO_BASE'      ? monto : 0,
+        iva:     tipo === 'IVA_ACREDITABLE' ? monto : 0,
+        noDed:   tipo === 'NO_DEDUCIBLE'    ? monto : 0,
+        ieps:    tipo === 'IEPS'            ? monto : 0,
+      });
+    }
+  }
+  const resumenRows = [...resByUUID.values(), ...resNoUUID];
 
   // Validación
   const sumOut = rows.reduce((s, r) => s + r.vals[COST_IDX], 0);
@@ -499,14 +540,14 @@ function processCSV(text) {
     revCats.set(k, { n: p.n + 1, total: p.total + r.vals[COST_IDX] });
   }
 
-  return { rows, sumOut, sumIn, revCats };
+  return { rows, resumenRows, sumOut, sumIn, revCats };
 }
 
 // ═══════════════════════════════════════════════════════════
 // GENERAR EXCEL
 // ═══════════════════════════════════════════════════════════
 function buildExcel(data, filename) {
-  const { rows, sumOut, sumIn } = data;
+  const { rows, resumenRows, sumOut, sumIn } = data;
 
   // Estilos
   const S = {
@@ -610,8 +651,29 @@ function buildExcel(data, filename) {
   // Freeze primera fila
   ws['!freeze'] = { xSplit: 0, ySplit: 1 };
 
+  // === HOJA 1: RESUMEN ===
+  const RES_HDR = ['Nombre','Fecha Gasto','Descripción','Categoría','Total Gasto','Total Factura','IVA Acreditable','No Deducible','IEPS'];
+  const resAoa  = [
+    RES_HDR,
+    ...(resumenRows || []).map(g => [
+      g.nombre || null, g.fecha || null, g.desc || null, g.cat || null,
+      g.totalGasto, g.factura, g.iva, g.noDed, g.ieps,
+    ]),
+  ];
+  const wsRes = XLSX.utils.aoa_to_sheet(resAoa);
+  const sR = (r, c, st) => { const a = XLSX.utils.encode_cell({r, c}); if (wsRes[a]) wsRes[a].s = st; };
+  for (let c = 0; c < RES_HDR.length; c++) sR(0, c, S.hdr);
+  for (let r = 1; r <= (resumenRows || []).length; r++) {
+    for (let c = 0; c < RES_HDR.length; c++) {
+      sR(r, c, c >= 4 ? S.money : S.data);
+    }
+  }
+  wsRes['!cols']   = [{wch:28},{wch:14},{wch:45},{wch:30},{wch:18},{wch:18},{wch:18},{wch:18},{wch:14}];
+  wsRes['!freeze'] = { xSplit: 0, ySplit: 1 };
+
   const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'Dynamics Import');
+  XLSX.utils.book_append_sheet(wb, wsRes, 'Resumen');
+  XLSX.utils.book_append_sheet(wb, ws, 'Dynamics');
   XLSX.writeFile(wb, filename);
 }
 
