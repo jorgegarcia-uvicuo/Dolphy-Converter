@@ -402,7 +402,9 @@ const CUENTAS = {
   'Taxi (pasaje)':                '5005-054-001',
   'Estacionamiento':              '5005-072-001',
 };
-const NO_DED_CUENTA = '5005-083-001';
+const NO_DED_CUENTA   = '5005-083-001';
+const REVISAR_CUENTA  = '5005-052-004';
+const RETISR_CUENTA   = '2145-006-001';
 
 const HEADERS = [
   'Nombre',
@@ -430,18 +432,20 @@ function ivaGroup(tipo, tasa) {
   if (tipo === 'IVA_ACREDITABLE') return 'IVAGENERAL';
   if (tipo === 'IEPS')            return 'IVATASA0%';
   if (tipo === 'NO_DEDUCIBLE')    return 'NO DEDUCIBLE';
+  if (tipo === 'RETENCION_ISR')   return 'RETISRPFACTEMPRERES';
   return 'REVISAR';
 }
 
 function descripcion(tipo, cat, desc) {
-  const prefix  = tipo === 'NO_DEDUCIBLE' ? 'NO DEDUCIBLES' : (cat.toUpperCase() || 'SIN CATEGORIA');
   const negocio = desc.toUpperCase() || cat.toUpperCase();
-  return negocio ? `${prefix}/${negocio}` : prefix;
+  if (negocio) return negocio;
+  return tipo === 'NO_DEDUCIBLE' ? 'NO DEDUCIBLES' : (cat.toUpperCase() || 'SIN CATEGORIA');
 }
 
 function numero(tipo, cat) {
-  if (tipo === 'NO_DEDUCIBLE') return NO_DED_CUENTA;
-  return CUENTAS[cat] || 'REVISAR';
+  if (tipo === 'NO_DEDUCIBLE')  return NO_DED_CUENTA;
+  if (tipo === 'RETENCION_ISR') return RETISR_CUENTA;
+  return CUENTAS[cat] || REVISAR_CUENTA;
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -462,10 +466,11 @@ function processCSV(text) {
     const tasa     = clean(r['Tasa']);
     const rawMonto = parseFloat(clean(r['Monto Línea'])) || 0;
     const monto    = tipo === 'RETENCION_ISR' ? -rawMonto : rawMonto;
-    const cc       = clean(r['Centro de Costo']);
     const empleado = clean(r['Empleado']);
     const nro      = numero(tipo, cat);
     const isRev    = nro === 'REVISAR';
+
+    if (tipo === 'IVA_ACREDITABLE') continue; // Dynamics calcula el IVA solo
 
     rows.push({
       vals: [
@@ -473,7 +478,7 @@ function processCSV(text) {
         'Cuenta', nro, descripcion(tipo, cat, desc), 'No',
         null, 1, null, monto,
         'VARIOS', ivaGroup(tipo, tasa),
-        null, null, monto, 0, 0, cc || null,
+        null, null, monto, 0, 0, null,
       ],
       isRev, cat, tipo,
     });
