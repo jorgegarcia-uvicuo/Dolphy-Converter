@@ -426,13 +426,14 @@ function clean(v) {
   return ['nan','none','undefined',''].includes(s.toLowerCase()) ? '' : s;
 }
 
-function ivaGroup(tipo, tasa) {
+function ivaGroup(tipo, tasa, facturado) {
   const t = parseFloat(tasa) || 0;
   if (tipo === 'GASTO_BASE')      return Math.abs(t - 0.16) < 0.001 ? 'IVAGENERAL' : 'IVATASA0%';
   if (tipo === 'IVA_ACREDITABLE') return 'IVAGENERAL';
   if (tipo === 'IEPS')            return 'IVATASA0%';
   if (tipo === 'NO_DEDUCIBLE')    return 'NO DEDUCIBLE';
   if (tipo === 'RETENCION_ISR')   return 'RETISRPFACTEMPRERES';
+  if (tipo === 'ISH')             return facturado ? 'IVATASA0%' : 'NO DEDUCIBLE';
   return 'REVISAR';
 }
 
@@ -445,6 +446,7 @@ function descripcion(tipo, cat, desc) {
 function numero(tipo, cat) {
   if (tipo === 'NO_DEDUCIBLE')  return NO_DED_CUENTA;
   if (tipo === 'RETENCION_ISR') return RETISR_CUENTA;
+  if (tipo === 'ISH')           return CUENTAS['Hospedaje'];
   return CUENTAS[cat] || REVISAR_CUENTA;
 }
 
@@ -467,6 +469,7 @@ function processCSV(text) {
     const rawMonto = parseFloat(clean(r['Monto Línea'])) || 0;
     const monto    = tipo === 'RETENCION_ISR' ? -rawMonto : rawMonto;
     const empleado = clean(r['Empleado']);
+    const facturado = !!clean(r['UUID']);
     const nro      = numero(tipo, cat);
     const isRev    = nro === 'REVISAR';
 
@@ -477,52 +480,64 @@ function processCSV(text) {
         empleado || null,
         'Cuenta', nro, descripcion(tipo, cat, desc), 'No',
         null, 1, null, monto,
-        'VARIOS', ivaGroup(tipo, tasa),
+        'VARIOS', ivaGroup(tipo, tasa, facturado),
         null, null, monto, 0, 0, null,
       ],
       isRev, cat, tipo,
     });
   }
 
-  // Resumen: agrupar por UUID (una fila por gasto/transacción)
+  // Resumen: estado de cuenta fiel al CSV, una fila por transacción (agrupado por UUID)
   const resByUUID = new Map();
-  const resNoUUID = [];
+  const resList   = [];
   for (const r of data) {
     const uuid  = clean(r['UUID']);
     const tipo  = clean(r['Tipo de Línea']);
+    const nat   = clean(r['Naturaleza']);
     const monto = parseFloat(clean(r['Monto Línea'])) || 0;
+    const [fecha, hora] = clean(r['Fecha Gasto']).split(' ');
 
     if (uuid) {
-      if (!resByUUID.has(uuid)) {
-        resByUUID.set(uuid, {
-          nombre: clean(r['Empleado']),
-          fecha:  clean(r['Fecha Gasto']),
-          desc:   clean(r['Descripción']),
-          cat:    clean(r['Categoría Gasto']),
-          totalGasto: parseFloat(clean(r['Total Gasto'])) || 0,
-          factura: 0, iva: 0, noDed: 0, ieps: 0,
-        });
+      let g = resByUUID.get(uuid);
+      if (!g) {
+        g = {
+          nombre: clean(r['Empleado']), fecha: fecha || '', hora: hora || '',
+          desc: clean(r['Descripción']), cat: clean(r['Categoría Gasto']),
+          uuid, totalFactura: parseFloat(clean(r['Total Factura'])) || 0,
+          cargo: 0, abono: 0, baseReal: 0, iva: 0, ieps: 0, ish: 0, isr: 0,
+        };
+        resByUUID.set(uuid, g);
+        resList.push(g);
       }
-      const g = resByUUID.get(uuid);
-      if (tipo === 'GASTO_BASE')      g.factura += monto;
-      if (tipo === 'IVA_ACREDITABLE') g.iva     += monto;
-      if (tipo === 'NO_DEDUCIBLE')    g.noDed   += monto;
-      if (tipo === 'IEPS')            g.ieps    += monto;
+      if (nat === 'CARGO') g.cargo += monto;
+      if (nat === 'ABONO') g.abono += monto;
+      if (tipo === 'GASTO_BASE')      g.baseReal += monto;
+      if (tipo === 'IVA_ACREDITABLE') g.iva      += monto;
+      if (tipo === 'IEPS')            g.ieps     += monto;
+      if (tipo === 'ISH')             g.ish      += monto;
+      if (tipo === 'RETENCION_ISR')   g.isr      -= monto;
     } else {
-      resNoUUID.push({
-        nombre: clean(r['Empleado']),
-        fecha:  clean(r['Fecha Gasto']),
-        desc:   clean(r['Descripción']),
-        cat:    clean(r['Categoría Gasto']),
-        totalGasto: parseFloat(clean(r['Total Gasto'])) || monto,
-        factura: tipo === 'GASTO_BASE'      ? monto : 0,
-        iva:     tipo === 'IVA_ACREDITABLE' ? monto : 0,
-        noDed:   tipo === 'NO_DEDUCIBLE'    ? monto : 0,
-        ieps:    tipo === 'IEPS'            ? monto : 0,
+      resList.push({
+        nombre: clean(r['Empleado']), fecha: fecha || '', hora: hora || '',
+        desc: clean(r['Descripción']), cat: clean(r['Categoría Gasto']),
+        uuid: '', totalFactura: parseFloat(clean(r['Total Factura'])) || 0,
+        cargo: nat === 'CARGO' ? monto : 0,
+        abono: nat === 'ABONO' ? monto : 0,
+        baseReal: tipo === 'GASTO_BASE'      ? monto : 0,
+        iva:      tipo === 'IVA_ACREDITABLE' ? monto : 0,
+        ieps:     tipo === 'IEPS'            ? monto : 0,
+        ish:      tipo === 'ISH'             ? monto : 0,
+        isr:      tipo === 'RETENCION_ISR'   ? -monto : 0,
       });
     }
   }
-  const resumenRows = [...resByUUID.values(), ...resNoUUID];
+
+  // Saldo acumulado corrido (Cargo - Abono) en orden de aparición
+  let saldo = 0;
+  const resumenRows = resList.map(g => {
+    saldo += g.cargo - g.abono;
+    return { ...g, saldo, estado: g.uuid ? 'Con factura' : 'Sin factura' };
+  });
 
   // Validación
   const sumOut = rows.reduce((s, r) => s + r.vals[COST_IDX], 0);
@@ -656,13 +671,19 @@ function buildExcel(data, filename) {
   // Freeze primera fila
   ws['!freeze'] = { xSplit: 0, ySplit: 1 };
 
-  // === HOJA 1: RESUMEN ===
-  const RES_HDR = ['Nombre','Fecha Gasto','Descripción','Categoría','Total Gasto','Total Factura','IVA Acreditable','No Deducible','IEPS'];
+  // === HOJA 1: RESUMEN (estado de cuenta) ===
+  const RES_HDR = [
+    'Nombre','Fecha Gasto','Hora','Transacción','Cargo','Abono','Saldo acumulado',
+    'Categoría','Estado','Folio fiscal','Total Factura','Base Real','IVA','IEPS','ISH','ISR',
+  ];
+  const RES_MONEY = new Set([4,5,6,10,11,12,13,14,15]);
   const resAoa  = [
     RES_HDR,
     ...(resumenRows || []).map(g => [
-      g.nombre || null, g.fecha || null, g.desc || null, g.cat || null,
-      g.totalGasto, g.factura, g.iva, g.noDed, g.ieps,
+      g.nombre || null, g.fecha || null, g.hora || null, g.desc || null,
+      g.cargo || null, g.abono || null, g.saldo,
+      g.cat || null, g.estado, g.uuid || null, g.totalFactura,
+      g.baseReal, g.iva, g.ieps, g.ish, g.isr,
     ]),
   ];
   const wsRes = XLSX.utils.aoa_to_sheet(resAoa);
@@ -670,10 +691,13 @@ function buildExcel(data, filename) {
   for (let c = 0; c < RES_HDR.length; c++) sR(0, c, S.hdr);
   for (let r = 1; r <= (resumenRows || []).length; r++) {
     for (let c = 0; c < RES_HDR.length; c++) {
-      sR(r, c, c >= 4 ? S.money : S.data);
+      sR(r, c, RES_MONEY.has(c) ? S.money : S.data);
     }
   }
-  wsRes['!cols']   = [{wch:28},{wch:14},{wch:45},{wch:30},{wch:18},{wch:18},{wch:18},{wch:18},{wch:14}];
+  wsRes['!cols'] = [
+    {wch:28},{wch:12},{wch:10},{wch:40},{wch:14},{wch:14},{wch:16},
+    {wch:28},{wch:14},{wch:38},{wch:14},{wch:14},{wch:14},{wch:14},{wch:14},{wch:14},
+  ];
   wsRes['!freeze'] = { xSplit: 0, ySplit: 1 };
 
   const wb = XLSX.utils.book_new();
