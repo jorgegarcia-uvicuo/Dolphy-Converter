@@ -460,13 +460,57 @@ function processCSV(text) {
     transform: v => v ? v.trim() : v,
   });
 
+  // Corrección Subtotal Tasa 0% para gastos con IEPS (el CSV lo reporta inflado):
+  //   Subtotal con IVA    = IVA Acreditable ÷ 0.16
+  //   Monto gravado total = IVA Acreditable + Subtotal con IVA + IEPS
+  //   Subtotal Tasa 0%    = Total Factura − Monto gravado total
+  const montoOverride = new Map(); // índice en `data` -> monto corregido
+  {
+    const byUUID = new Map();
+    data.forEach((r, i) => {
+      const uuid = clean(r['UUID']);
+      if (!uuid) return;
+      if (!byUUID.has(uuid)) byUUID.set(uuid, []);
+      byUUID.get(uuid).push(i);
+    });
+    for (const idxs of byUUID.values()) {
+      const hasIeps = idxs.some(i => clean(data[i]['Tipo de Línea']) === 'IEPS');
+      if (!hasIeps) continue;
+
+      const ivaAcreditable = idxs
+        .filter(i => clean(data[i]['Tipo de Línea']) === 'IVA_ACREDITABLE')
+        .reduce((s, i) => s + (parseFloat(clean(data[i]['Monto Línea'])) || 0), 0);
+      if (ivaAcreditable <= 0) continue; // sin base para la fórmula, no se corrige
+
+      const iepsTotal = idxs
+        .filter(i => clean(data[i]['Tipo de Línea']) === 'IEPS')
+        .reduce((s, i) => s + (parseFloat(clean(data[i]['Monto Línea'])) || 0), 0);
+
+      const totalFacturaRow = idxs
+        .map(i => parseFloat(clean(data[i]['Total Factura'])) || 0)
+        .find(v => v > 0) || 0;
+
+      const subtotalConIVA    = ivaAcreditable / 0.16;
+      const montoGravadoTotal = ivaAcreditable + subtotalConIVA + iepsTotal;
+      const subtotalTasa0     = totalFacturaRow - montoGravadoTotal;
+
+      const tasa0Idxs = idxs.filter(i => {
+        const r2 = data[i];
+        return clean(r2['Tipo de Línea']) === 'GASTO_BASE'
+          && Math.abs((parseFloat(clean(r2['Tasa'])) || 0) - 0.16) >= 0.001;
+      });
+      tasa0Idxs.forEach((i, k) => montoOverride.set(i, k === 0 ? subtotalTasa0 : 0));
+    }
+  }
+
   const rows = [];
-  for (const r of data) {
+  for (let i = 0; i < data.length; i++) {
+    const r        = data[i];
     const cat      = clean(r['Categoría Gasto']);
     const desc     = clean(r['Descripción']);
     const tipo     = clean(r['Tipo de Línea']);
     const tasa     = clean(r['Tasa']);
-    const rawMonto = parseFloat(clean(r['Monto Línea'])) || 0;
+    const rawMonto = montoOverride.has(i) ? montoOverride.get(i) : (parseFloat(clean(r['Monto Línea'])) || 0);
     const monto    = tipo === 'RETENCION_ISR' ? -rawMonto : rawMonto;
     const empleado = clean(r['Empleado']);
     const facturado = !!clean(r['UUID']);
@@ -490,11 +534,13 @@ function processCSV(text) {
   // Resumen: estado de cuenta fiel al CSV, una fila por transacción (agrupado por UUID)
   const resByUUID = new Map();
   const resList   = [];
-  for (const r of data) {
+  for (let i = 0; i < data.length; i++) {
+    const r     = data[i];
     const uuid  = clean(r['UUID']);
     const tipo  = clean(r['Tipo de Línea']);
     const nat   = clean(r['Naturaleza']);
     const monto = parseFloat(clean(r['Monto Línea'])) || 0;
+    const baseMonto = montoOverride.has(i) ? montoOverride.get(i) : monto;
     const [fecha, hora] = clean(r['Fecha Gasto']).split(' ');
 
     if (uuid) {
@@ -511,7 +557,7 @@ function processCSV(text) {
       }
       if (nat === 'CARGO') g.cargo += monto;
       if (nat === 'ABONO') g.abono += monto;
-      if (tipo === 'GASTO_BASE')      g.baseReal += monto;
+      if (tipo === 'GASTO_BASE')      g.baseReal += baseMonto;
       if (tipo === 'IVA_ACREDITABLE') g.iva      += monto;
       if (tipo === 'IEPS')            g.ieps     += monto;
       if (tipo === 'ISH')             g.ish      += monto;
@@ -523,7 +569,7 @@ function processCSV(text) {
         uuid: '', totalFactura: parseFloat(clean(r['Total Factura'])) || 0,
         cargo: nat === 'CARGO' ? monto : 0,
         abono: nat === 'ABONO' ? monto : 0,
-        baseReal: tipo === 'GASTO_BASE'      ? monto : 0,
+        baseReal: tipo === 'GASTO_BASE'      ? baseMonto : 0,
         iva:      tipo === 'IVA_ACREDITABLE' ? monto : 0,
         ieps:     tipo === 'IEPS'            ? monto : 0,
         ish:      tipo === 'ISH'             ? monto : 0,
