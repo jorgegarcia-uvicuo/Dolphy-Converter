@@ -550,6 +550,7 @@ function processCSV(text) {
           nombre: clean(r['Empleado']), fecha: fecha || '', hora: hora || '',
           desc: clean(r['Descripción']), cat: clean(r['Categoría Gasto']),
           uuid, totalFactura: parseFloat(clean(r['Total Factura'])) || 0,
+          totalGasto: parseFloat(clean(r['Total Gasto'])) || 0,
           cargo: 0, abono: 0, baseReal: 0, iva: 0, ieps: 0, ish: 0, isr: 0,
         };
         resByUUID.set(uuid, g);
@@ -567,6 +568,7 @@ function processCSV(text) {
         nombre: clean(r['Empleado']), fecha: fecha || '', hora: hora || '',
         desc: clean(r['Descripción']), cat: clean(r['Categoría Gasto']),
         uuid: '', totalFactura: parseFloat(clean(r['Total Factura'])) || 0,
+        totalGasto: parseFloat(clean(r['Total Gasto'])) || 0,
         cargo: nat === 'CARGO' ? monto : 0,
         abono: nat === 'ABONO' ? monto : 0,
         baseReal: tipo === 'GASTO_BASE'      ? baseMonto : 0,
@@ -720,15 +722,16 @@ function buildExcel(data, filename) {
   // === HOJA 1: RESUMEN (estado de cuenta) ===
   const RES_HDR = [
     'Nombre','Fecha Gasto','Hora','Transacción','Cargo','Abono','Saldo acumulado',
-    'Categoría','Estado','Folio fiscal','Total Factura','Base Real','IVA','IEPS','ISH','ISR',
+    'Categoría','Estado','Folio fiscal','Total Factura','Monto no facturado','Base Real','IVA','IEPS','ISH','ISR',
   ];
-  const RES_MONEY = new Set([4,5,6,10,11,12,13,14,15]);
+  const RES_MONEY = new Set([4,5,6,10,11,12,13,14,15,16]);
   const resAoa  = [
     RES_HDR,
     ...(resumenRows || []).map(g => [
       g.nombre || null, g.fecha || null, g.hora || null, g.desc || null,
       g.cargo || null, g.abono || null, g.saldo,
       g.cat || null, g.estado, g.uuid || null, g.totalFactura,
+      g.totalGasto - g.totalFactura,
       g.baseReal, g.iva, g.ieps, g.ish, g.isr,
     ]),
   ];
@@ -742,7 +745,7 @@ function buildExcel(data, filename) {
   }
   wsRes['!cols'] = [
     {wch:28},{wch:12},{wch:10},{wch:40},{wch:14},{wch:14},{wch:16},
-    {wch:28},{wch:14},{wch:38},{wch:14},{wch:14},{wch:14},{wch:14},{wch:14},{wch:14},
+    {wch:28},{wch:14},{wch:38},{wch:14},{wch:18},{wch:14},{wch:14},{wch:14},{wch:14},{wch:14},
   ];
   wsRes['!freeze'] = { xSplit: 0, ySplit: 1 };
 
