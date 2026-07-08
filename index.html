@@ -550,7 +550,6 @@ function processCSV(text) {
           nombre: clean(r['Empleado']), fecha: fecha || '', hora: hora || '',
           desc: clean(r['Descripción']), cat: clean(r['Categoría Gasto']),
           uuid, totalFactura: parseFloat(clean(r['Total Factura'])) || 0,
-          totalGasto: parseFloat(clean(r['Total Gasto'])) || 0,
           cargo: 0, abono: 0, baseReal: 0, iva: 0, ieps: 0, ish: 0, isr: 0,
         };
         resByUUID.set(uuid, g);
@@ -568,7 +567,6 @@ function processCSV(text) {
         nombre: clean(r['Empleado']), fecha: fecha || '', hora: hora || '',
         desc: clean(r['Descripción']), cat: clean(r['Categoría Gasto']),
         uuid: '', totalFactura: parseFloat(clean(r['Total Factura'])) || 0,
-        totalGasto: parseFloat(clean(r['Total Gasto'])) || 0,
         cargo: nat === 'CARGO' ? monto : 0,
         abono: nat === 'ABONO' ? monto : 0,
         baseReal: tipo === 'GASTO_BASE'      ? baseMonto : 0,
@@ -731,7 +729,7 @@ function buildExcel(data, filename) {
       g.nombre || null, g.fecha || null, g.hora || null, g.desc || null,
       g.cargo || null, g.abono || null, g.saldo,
       g.cat || null, g.estado, g.uuid || null, g.totalFactura,
-      g.totalGasto - g.totalFactura,
+      g.cargo - g.totalFactura,
       g.baseReal, g.iva, g.ieps, g.ish, g.isr,
     ]),
   ];
